@@ -244,7 +244,7 @@ class AKPlugin: NSObject, Plugin {
         logger.info("terminateApplication() requested — attempting graceful terminate")
 
         // Try Cocoa termination first (gives app a chance to clean up)
-        NSApplication.shared.terminate(self)
+        // NSApplication.shared.terminate(self)
 
         // Immediate synchronous fallback: if exit/atexit handlers block, directly
         // send SIGKILL to ensure the process is removed from the process table.
