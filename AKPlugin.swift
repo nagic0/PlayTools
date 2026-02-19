@@ -102,8 +102,12 @@ class AKPlugin: NSObject, Plugin {
         }
         set {
             if let newValue {
-                DispatchQueue.main.async {
+                if Thread.isMainThread {
                     NSApplication.shared.windows.first?.title = newValue
+                } else {
+                    DispatchQueue.main.async {
+                        NSApplication.shared.windows.first?.title = newValue
+                    }
                 }
             }
         }

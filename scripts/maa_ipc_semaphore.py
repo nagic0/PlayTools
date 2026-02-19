@@ -51,6 +51,11 @@ libc.sem_post.argtypes = [ctypes.c_void_p]
 libc.sem_post.restype = ctypes.c_int
 libc.sem_trywait.argtypes = [ctypes.c_void_p]
 libc.sem_trywait.restype = ctypes.c_int
+# 注意：macOS 的 POSIX 信号量不提供 sem_timedwait，超时依赖下方 threading.Event 实现
+
+# errno 常量
+EINTR  = 4
+EAGAIN = 35
 
 # 常量
 O_RDWR = 0x0002
@@ -537,7 +542,10 @@ class MaaToolsIPC:
                 try:
                     # 发送心跳字节
                     self.unix_socket.sendall(b'\x01')
-                    print("💓 心跳发送")
+                    # 使用 sys.stderr 避免 stdout 缓冲刷新时持有 GIL 过长
+                    import sys as _sys
+                    _sys.stderr.write("💓 心跳发送\n")
+                    _sys.stderr.flush()
                 except (BrokenPipeError, ConnectionResetError, OSError) as e:
                     print(f"\n❌ 连接已断开: {e}")
                     print("❌ PlayCover 可能已退出或崩溃")
@@ -633,35 +641,58 @@ class MaaToolsIPC:
         return self.seq_id
     
     def _wait_event(self, timeout: float = 5.0) -> Optional[Tuple[int, int, int]]:
-        """等待事件响应（type, reqSeqId, errorCode）"""
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            # ⚡ 使用信号量等待（阻塞，零延迟）
-            # 使用 trywait 配合短超时，避免永久阻塞
-            if libc.sem_trywait(self.event_sem) == 0:
-                # 有信号，读取事件
-                read_idx = struct.unpack('<I', self.mmap_obj[192:196])[0]
+        """等待事件响应（type, reqSeqId, errorCode）
+
+        【修复说明】
+        原实现用 sem_trywait + time.sleep(0.1ms) 轮询：
+          · time.sleep 释放 GIL 后需要重新竞争 GIL
+          · 若心跳线程恰好在此时执行 sendall + print（可能持 GIL 数百 ms），
+            主线程会长时间拿不回 GIL，造成延迟尖峰（实测 >1s）
+
+        正确做法：在 daemon 线程里直接调用阻塞 sem_wait。
+          · ctypes C 调用会自动释放 GIL，sem_wait 在内核阻塞期间 GIL 完全空闲
+          · Swift 调用 sem_post → sem_wait 立即返回，无轮询延迟
+          · 主线程用 threading.Event.wait(timeout) 等待结果（不持有 GIL）
+        """
+        result: list = [None]
+        done = threading.Event()
+
+        def _waiter():
+            # sem_wait 是 C 调用，ctypes 在执行期间自动释放 GIL
+            # 因此心跳线程/其他线程可以自由运行，不会互相阻塞
+            while True:
+                ret = libc.sem_wait(self.event_sem)
+                if ret != 0:
+                    err = ctypes.get_errno()
+                    if err == EINTR:
+                        continue   # 被信号中断，重试
+                    break          # 其他错误（信号量被关闭等），退出
+                # 读取事件
+                read_idx  = struct.unpack('<I', self.mmap_obj[192:196])[0]
                 write_idx = struct.unpack('<I', self.mmap_obj[128:132])[0]
-                
                 if read_idx != write_idx:
-                    index = read_idx % RING_SIZE
+                    index  = read_idx % RING_SIZE
                     offset = HEADER_SIZE + CMD_RING_SIZE + index * EVENT_PACKET_SIZE
-                    
-                    event_data = self.mmap_obj[offset:offset+EVENT_PACKET_SIZE]
-                    # 注意：Swift 结构体有对齐，type 后有 3 字节填充
-                    evt_type, req_seq_id, error_code = struct.unpack('<B3xIi', event_data[:12])
-                    
-                    # 更新读索引
-                    new_read_idx = (read_idx + 1) % (RING_SIZE * 2)
-                    self.mmap_obj[192:196] = struct.pack('<I', new_read_idx)
-                    
-                    return (evt_type, req_seq_id, error_code)
-            
-            # 短暂休眠，避免 CPU 占用过高
-            time.sleep(0.0001)  # 0.1ms
-        
-        return None
+                    evt_type, req_seq_id, error_code = struct.unpack(
+                        '<B3xIi', self.mmap_obj[offset:offset + 12])
+                    self.mmap_obj[192:196] = struct.pack(
+                        '<I', (read_idx + 1) % (RING_SIZE * 2))
+                    result[0] = (evt_type, req_seq_id, error_code)
+                # 不论是否读到事件，都通知主线程（超时注入的 token 也会走到这里）
+                break
+            done.set()
+
+        t = threading.Thread(target=_waiter, daemon=True)
+        t.start()
+
+        if not done.wait(timeout=timeout):
+            # 超时：往 event_sem 注入一个 token，让 _waiter 从 sem_wait 返回并退出
+            # （下一条命令的 sem_post 不受影响，因为 _waiter 会先消耗掉这个 token）
+            libc.sem_post(self.event_sem)
+            done.wait(timeout=1.0)  # 等 _waiter 线程退出
+            return None
+
+        return result[0]
     
     def tap(self, x: int, y: int, duration: int = 50) -> bool:
         """点击"""

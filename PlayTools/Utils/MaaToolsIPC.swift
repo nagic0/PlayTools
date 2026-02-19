@@ -281,6 +281,7 @@ final class MaaToolsIPC {
             let success = await MainActor.run { [weak self] () -> Bool in
                 return self?.captureToSharedMemory() ?? false
             }
+            logger.info("→ SCREENSHOT_\(success ? "READY" : "ERROR") seq=\(cmd.seqId)")
             sendEvent(
                 type: success ? .screenshotReady : .error,
                 reqSeqId: cmd.seqId,
@@ -303,6 +304,7 @@ final class MaaToolsIPC {
                                  tid: &self.tid, actionName: "up", keyName: "maa_tap")
                 Toucher.keyView = nil
             }
+            logger.info("→ ACK tap seq=\(cmd.seqId) point=(\(cmd.x),\(cmd.y)) duration=\(cmd.duration)ms")
             sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
 
         case .swipe:
@@ -316,11 +318,13 @@ final class MaaToolsIPC {
         case .getSize:
             logger.debug("GET_SIZE seq=\(cmd.seqId)")
             let encoded = IPCConfig.encodeScreenSize(width: screenWidth, height: screenHeight)
+            logger.info("→ SIZE_INFO seq=\(cmd.seqId) width=\(self.screenWidth) height=\(self.screenHeight)")
             sendEvent(type: .sizeInfo, reqSeqId: cmd.seqId,
                       errorCode: encoded, eventSem: eventSem)
 
         case .getVersion:
             logger.debug("GET_VERSION seq=\(cmd.seqId)")
+            logger.info("→ VERSION_INFO seq=\(cmd.seqId) version=\(IPCConfig.protocolVersion)")
             sendEvent(type: .versionInfo, reqSeqId: cmd.seqId,
                       errorCode: Int32(IPCConfig.protocolVersion), eventSem: eventSem)
         }
@@ -427,6 +431,7 @@ final class MaaToolsIPC {
                              tid: &self.tid, actionName: "up", keyName: "maa_swipe")
             Toucher.keyView = nil
         }
+        logger.info("→ ACK swipe seq=\(cmd.seqId) (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) duration=\(cmd.duration)ms")
         sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
     }
 
@@ -469,6 +474,7 @@ final class MaaToolsIPC {
                              tid: &self.tid, actionName: "up", keyName: "maa_drag")
             Toucher.keyView = nil
         }
+        logger.info("→ ACK drag seq=\(cmd.seqId) (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) duration=\(cmd.duration)ms")
         sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
     }
 
