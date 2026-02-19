@@ -20,6 +20,7 @@ public class PlayCover: NSObject {
 
         DispatchQueue.main.async {
             MaaTools.shared.initialize()
+            MaaToolsIPC.shared.initialize()
         }
 
         if PlaySettings.shared.rootWorkDir {

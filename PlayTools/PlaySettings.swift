@@ -78,6 +78,8 @@ let settings = PlaySettings.shared
 
     @objc lazy var maaToolsPort = settingsData.maaToolsPort
 
+    @objc lazy var maaToolsShm = settingsData.maaToolsShm
+
     @objc lazy var windowFixMethod = settingsData.windowFixMethod
 
     @objc lazy var customScaler = settingsData.customScaler
@@ -122,6 +124,7 @@ struct AppSettingsData: Codable {
     var windowFixMethod = 0
     var maaTools = false
     var maaToolsPort = 1717
+    var maaToolsShm = false
     var rootWorkDir = true
     var noKMOnInput = false
     var enableScrollWheel = true
