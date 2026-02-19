@@ -161,9 +161,12 @@ final class MaaToolsIPC {
             .first { $0.isKeyWindow }
 
         if let screen = window?.windowScene?.screen {
-            screenWidth  = Int(screen.nativeBounds.width.rounded())
-            screenHeight = Int(screen.nativeBounds.height.rounded())
-            scale        = screen.nativeScale
+            // 使用逻辑点分辨率（与 AKPlugin.windowImage 无 bestResolution 对齐）
+            // MAA 图像识别不需要 Retina 精度，逻辑分辨率已足够，且数据量少 4 倍
+            screenWidth  = Int(screen.bounds.width.rounded())
+            screenHeight = Int(screen.bounds.height.rounded())
+            // Python 侧坐标基于逻辑分辨率图像，直接传入 UIKit 逻辑点，无需除以 nativeScale
+            scale        = 1.0
         }
     }
 
@@ -357,8 +360,8 @@ final class MaaToolsIPC {
     /// 注意：必须在主线程调用（UIKit / CoreGraphics 要求）
     @MainActor
     private func captureToSharedMemory() -> Bool {
-        guard let cgImage = AKInterface.shared?.windowImage else {
-            logger.error("windowImage unavailable")
+        guard let cgImage = AKInterface.shared?.windowImageLogical else {
+            logger.error("windowImageLogical unavailable")
             return false
         }
         guard screenWidth > 0, screenHeight > 0 else {

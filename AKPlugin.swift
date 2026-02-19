@@ -120,6 +120,15 @@ class AKPlugin: NSObject, Plugin {
         return CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(windowID), [.bestResolution, .boundsIgnoreFraming])
     }
 
+    var windowImageLogical: CGImage? {
+        guard let windowID = NSApplication.shared.windows.first?.windowNumber else {
+            return nil
+        }
+        // 逻辑分辨率（不带 bestResolution）：数据量是 Retina 版的 1/4，WindowServer 传输耗时大幅降低
+        // 专供 MaaToolsIPC 使用［MAA 图像识别不需要 Retina 精度｝
+        return CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(windowID), [.boundsIgnoreFraming])
+    }
+
     var cmdPressed: Bool = false
     var cursorHideLevel = 0
     func hideCursor() {
