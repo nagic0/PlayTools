@@ -62,6 +62,7 @@ final class MaaToolsIPC {
     // 屏幕信息（主线程写，其他线程只读）
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
+    private var scale: Double = 1.0
 
     // 命令处理 Task 控制
     private var processingTask: Task<Void, Never>?
@@ -156,6 +157,7 @@ final class MaaToolsIPC {
         if let screen = window?.windowScene?.screen {
             screenWidth  = Int(screen.nativeBounds.width.rounded())
             screenHeight = Int(screen.nativeBounds.height.rounded())
+            scale        = screen.nativeScale
         }
     }
 
@@ -291,7 +293,7 @@ final class MaaToolsIPC {
 
         case .tap:
             logger.debug("TAP (\(cmd.x),\(cmd.y)) \(cmd.duration)ms seq=\(cmd.seqId)")
-            let point = CGPoint(x: Int(cmd.x), y: Int(cmd.y))
+            let point = CGPoint(x: Double(cmd.x) / scale, y: Double(cmd.y) / scale)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 Toucher.touchcam(point: point, phase: .began,
@@ -397,8 +399,8 @@ final class MaaToolsIPC {
         _ cmd: IPCCommandPacket,
         eventSem: UnsafeMutablePointer<sem_t>?
     ) async {
-        let p1       = CGPoint(x: Int(cmd.x),  y: Int(cmd.y))
-        let p2       = CGPoint(x: Int(cmd.x2), y: Int(cmd.y2))
+        let p1       = CGPoint(x: Double(cmd.x) / scale,  y: Double(cmd.y) / scale)
+        let p2       = CGPoint(x: Double(cmd.x2) / scale, y: Double(cmd.y2) / scale)
         let duration = Double(cmd.duration) / 1000.0
         let steps    = 20
 
@@ -412,8 +414,8 @@ final class MaaToolsIPC {
         for step in 1..<steps {
             let ratio = Double(step) / Double(steps)
             let mid = CGPoint(
-                x: Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio,
-                y: Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio
+                x: (Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio) / scale,
+                y: (Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio) / scale
             )
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
@@ -439,8 +441,8 @@ final class MaaToolsIPC {
         _ cmd: IPCCommandPacket,
         eventSem: UnsafeMutablePointer<sem_t>?
     ) async {
-        let p1       = CGPoint(x: Int(cmd.x),  y: Int(cmd.y))
-        let p2       = CGPoint(x: Int(cmd.x2), y: Int(cmd.y2))
+        let p1       = CGPoint(x: Double(cmd.x) / scale,  y: Double(cmd.y) / scale)
+        let p2       = CGPoint(x: Double(cmd.x2) / scale, y: Double(cmd.y2) / scale)
         let duration = Double(cmd.duration) / 1000.0
         let steps    = 20
 
@@ -455,8 +457,8 @@ final class MaaToolsIPC {
         for step in 1..<steps {
             let ratio = Double(step) / Double(steps)
             let mid = CGPoint(
-                x: Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio,
-                y: Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio
+                x: (Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio) / scale,
+                y: (Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio) / scale
             )
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
