@@ -15,6 +15,7 @@ import time
 import json
 import struct
 import mmap
+import queue
 import socket
 import ctypes
 import threading
@@ -132,6 +133,11 @@ class MaaToolsIPC:
         self.connected = False
         self.heartbeat_thread: Optional[threading.Thread] = None
         self.heartbeat_stop = threading.Event()
+
+        # 持久事件 waiter 线程（整个 session 只创建一次）
+        self._event_queue: queue.Queue = queue.Queue()
+        self._event_waiter_thread: Optional[threading.Thread] = None
+        self._event_waiter_stop = threading.Event()
         
     def connect(self) -> bool:
         """连接到 MaaTools IPC"""
@@ -217,6 +223,47 @@ class MaaToolsIPC:
         print(f"⏳ 等待 Swift 端创建信号量...")
         return True
     
+    def _start_event_waiter(self) -> None:
+        """启动持久事件 waiter 线程。
+
+        整个 session 只需一个线程，始终阻塞在 sem_wait（C 调用，自动释放 GIL）。
+        Swift sem_post → sem_wait 立即返回 → 读 ring buffer → 结果入 Queue。
+        主线程通过 Queue.get(timeout) 拉取结果，Queue 内部正确管理 GIL。
+        彻底消除每次请求新建线程的开销和线程调度抖动。
+        """
+        self._event_waiter_stop.clear()
+        # 清空上次 session 残留的事件
+        while not self._event_queue.empty():
+            try:
+                self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        def _loop():
+            while not self._event_waiter_stop.is_set():
+                # sem_wait 是 C 调用，ctypes 自动释放 GIL；内核阻塞期间 GIL 完全空闲
+                ret = libc.sem_wait(self.event_sem)
+                if ret != 0:
+                    err = ctypes.get_errno()
+                    if err == EINTR:
+                        continue   # 信号中断，重试
+                    break          # 信号量被关闭等，退出循环
+                # 快速读取 ring buffer（GIL 短暂持有，仅 struct + mmap 操作）
+                read_idx  = struct.unpack('<I', self.mmap_obj[192:196])[0]
+                write_idx = struct.unpack('<I', self.mmap_obj[128:132])[0]
+                if read_idx != write_idx:
+                    index  = read_idx % RING_SIZE
+                    offset = HEADER_SIZE + CMD_RING_SIZE + index * EVENT_PACKET_SIZE
+                    evt    = struct.unpack('<B3xIi', self.mmap_obj[offset:offset + 12])
+                    self.mmap_obj[192:196] = struct.pack(
+                        '<I', (read_idx + 1) % (RING_SIZE * 2))
+                    self._event_queue.put(evt)
+                # 若 ring 为空（超时恢复注入的 spurious token），不入队，继续等待
+
+        self._event_waiter_thread = threading.Thread(target=_loop, daemon=True,
+                                                     name="maa-event-waiter")
+        self._event_waiter_thread.start()
+
     def _open_semaphores(self) -> bool:
         """打开 Swift 端创建的信号量"""
         # 打开命令信号量（Swift 创建，Python 打开）
@@ -499,7 +546,11 @@ class MaaToolsIPC:
                 self.unix_socket = None
                 return False
             print(f"✅ 信号量打开成功")
-            
+
+            # 6→. 启动持久事件 waiter 线程（必须在信号量打开后、心跳启动前）
+            self._start_event_waiter()
+            print(f"⚡ 事件 waiter 已启动")
+
             # 6. 启动心跳线程（保持连接）
             self.unix_socket.settimeout(None)  # 设置为阻塞模式
             self.heartbeat_stop.clear()
@@ -540,12 +591,10 @@ class MaaToolsIPC:
                     break
                 
                 try:
-                    # 发送心跳字节
+                    # 发送心跳字节（C 调用，释放 GIL）
                     self.unix_socket.sendall(b'\x01')
-                    # 使用 sys.stderr 避免 stdout 缓冲刷新时持有 GIL 过长
-                    import sys as _sys
-                    _sys.stderr.write("💓 心跳发送\n")
-                    _sys.stderr.flush()
+                    # os.write 是直接系统调用，比 print/stderr.write 持 GIL 时间短得多
+                    os.write(2, b"\xf0\x9f\x92\x93 \xe5\xbf\x83\xe8\xb7\xb3\xe5\x8f\x91\xe9\x80\x81\n")
                 except (BrokenPipeError, ConnectionResetError, OSError) as e:
                     print(f"\n❌ 连接已断开: {e}")
                     print("❌ PlayCover 可能已退出或崩溃")
@@ -559,6 +608,15 @@ class MaaToolsIPC:
     
     def _cleanup(self):
         """清理资源（Python 负责创建和删除）"""
+        # 停止持久 event waiter 线程
+        self._event_waiter_stop.set()
+        if self.event_sem and self.event_sem != SEM_FAILED:
+            # 注入一个 spurious token，让 waiter 从 sem_wait 中唤醒并检查 stop 标志
+            libc.sem_post(self.event_sem)
+        if self._event_waiter_thread and self._event_waiter_thread.is_alive():
+            self._event_waiter_thread.join(timeout=1.0)
+        self._event_waiter_thread = None
+
         # 停止心跳线程
         if self.heartbeat_thread and self.heartbeat_thread.is_alive():
             self.heartbeat_stop.set()
@@ -643,56 +701,17 @@ class MaaToolsIPC:
     def _wait_event(self, timeout: float = 5.0) -> Optional[Tuple[int, int, int]]:
         """等待事件响应（type, reqSeqId, errorCode）
 
-        【修复说明】
-        原实现用 sem_trywait + time.sleep(0.1ms) 轮询：
-          · time.sleep 释放 GIL 后需要重新竞争 GIL
-          · 若心跳线程恰好在此时执行 sendall + print（可能持 GIL 数百 ms），
-            主线程会长时间拿不回 GIL，造成延迟尖峰（实测 >1s）
-
-        正确做法：在 daemon 线程里直接调用阻塞 sem_wait。
-          · ctypes C 调用会自动释放 GIL，sem_wait 在内核阻塞期间 GIL 完全空闲
-          · Swift 调用 sem_post → sem_wait 立即返回，无轮询延迟
-          · 主线程用 threading.Event.wait(timeout) 等待结果（不持有 GIL）
+        【架构说明】
+        使用持久 waiter 线程 + Queue：
+          · waiter 线程始终阻塞在 sem_wait（C 调用，自动释放 GIL）
+          · Swift sem_post → sem_wait 立即返回 → 读 ring buffer（极短 GIL 持有）→ 结果入队
+          · 主线程通过 Queue.get(timeout) 拉取，内部正确释放 GIL，心跳线程完全不干扰
+          · 不再每次请求新建线程，消除线程创建开销和调度抖动
         """
-        result: list = [None]
-        done = threading.Event()
-
-        def _waiter():
-            # sem_wait 是 C 调用，ctypes 在执行期间自动释放 GIL
-            # 因此心跳线程/其他线程可以自由运行，不会互相阻塞
-            while True:
-                ret = libc.sem_wait(self.event_sem)
-                if ret != 0:
-                    err = ctypes.get_errno()
-                    if err == EINTR:
-                        continue   # 被信号中断，重试
-                    break          # 其他错误（信号量被关闭等），退出
-                # 读取事件
-                read_idx  = struct.unpack('<I', self.mmap_obj[192:196])[0]
-                write_idx = struct.unpack('<I', self.mmap_obj[128:132])[0]
-                if read_idx != write_idx:
-                    index  = read_idx % RING_SIZE
-                    offset = HEADER_SIZE + CMD_RING_SIZE + index * EVENT_PACKET_SIZE
-                    evt_type, req_seq_id, error_code = struct.unpack(
-                        '<B3xIi', self.mmap_obj[offset:offset + 12])
-                    self.mmap_obj[192:196] = struct.pack(
-                        '<I', (read_idx + 1) % (RING_SIZE * 2))
-                    result[0] = (evt_type, req_seq_id, error_code)
-                # 不论是否读到事件，都通知主线程（超时注入的 token 也会走到这里）
-                break
-            done.set()
-
-        t = threading.Thread(target=_waiter, daemon=True)
-        t.start()
-
-        if not done.wait(timeout=timeout):
-            # 超时：往 event_sem 注入一个 token，让 _waiter 从 sem_wait 返回并退出
-            # （下一条命令的 sem_post 不受影响，因为 _waiter 会先消耗掉这个 token）
-            libc.sem_post(self.event_sem)
-            done.wait(timeout=1.0)  # 等 _waiter 线程退出
+        try:
+            return self._event_queue.get(timeout=timeout)
+        except queue.Empty:
             return None
-
-        return result[0]
     
     def tap(self, x: int, y: int, duration: int = 50) -> bool:
         """点击"""
