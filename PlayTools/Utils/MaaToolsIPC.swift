@@ -129,42 +129,20 @@ final class MaaToolsIPC {
         server?.start()
         logger.info("MaaToolsIPC initialized, socket listening for client at: \(socketPath)")
 
-        // 更新窗口标题
-        updateWindowTitle()
+        // 更新窗口标题，添加 socket 信息
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if let currentTitle = AKInterface.shared?.windowTitle {
+                AKInterface.shared?.windowTitle = "\(currentTitle) [\(self.actualSocketName)]"
+                self.logger.info("Window title updated: \(currentTitle) [\(self.actualSocketName)]")
+            }
+        }
     }
 
     func uninitialize() {
         server?.stop()
         cleanupSession()
         logger.info("MaaToolsIPC uninitialized")
-    }
-
-    // MARK: - Window Title Update
-
-    /// 更新窗口标题，在末尾添加 [socket_filename]
-    private func updateWindowTitle() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, !self.actualSocketName.isEmpty else { return }
-
-            let window = UIApplication.shared.connectedScenes
-                .flatMap { ($0 as? UIWindowScene)?.windows ?? [] }
-                .first { $0.isKeyWindow }
-
-            guard let nsWindow = window?.nsWindow else { return }
-
-            // 通过 NSWindow 更新标题（使用 KVC）
-            if let nsWindowObject = nsWindow as? NSObject {
-                let currentTitle = nsWindowObject.value(forKey: "title") as? String ?? ""
-                // 避免重复添加 socket 名称
-                if !currentTitle.contains("[") || !currentTitle.contains("]") {
-                    let titleWithSocket = currentTitle + " [\(self.actualSocketName)]"
-                    nsWindowObject.setValue(titleWithSocket, forKey: "title")
-                    self.logger.info("Window title updated: \(titleWithSocket)")
-                } else {
-                    self.logger.debug("Window title already contains socket info: \(currentTitle)")
-                }
-            }
-        }
     }
 
     // MARK: - Screen Info
