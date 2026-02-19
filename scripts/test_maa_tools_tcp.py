@@ -193,15 +193,16 @@ class MaaToolsTCPClient:
             
             image_length = struct.unpack('>I', length_data)[0]
             
-            # 接收图像数据
-            data = b''
-            remaining = image_length
-            while remaining > 0:
-                chunk = self.sock.recv(min(remaining, 65536))
+            # 接收图像数据（用列表收集 chunks，避免 O(n²) 的 bytes 拼接）
+            chunks = []
+            received = 0
+            while received < image_length:
+                chunk = self.sock.recv(min(image_length - received, 65536))
                 if not chunk:
                     break
-                data += chunk
-                remaining -= len(chunk)
+                chunks.append(chunk)
+                received += len(chunk)
+            data = b''.join(chunks)
             
             if len(data) != image_length:
                 print(f"⚠️  图像数据不完整: {len(data)}/{image_length}")

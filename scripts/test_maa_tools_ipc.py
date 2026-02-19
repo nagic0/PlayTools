@@ -380,35 +380,23 @@ def main() -> int:
 
         # 性能测试
         if not args.no_perf:
-            print("(已跳过性能测试，使用 --no-perf=false 启用）")
+            print("\n" + "=" * 60)
+            print("⚠️  即将执行性能测试（约 130 次操作，需 1~2 分钟）")
+            print("=" * 60)
+            input("\n按 Enter 开始，Ctrl+C 取消...\n")
+
+            perf_results = test_performance(client, width, height)
+
+            print("\n" + "=" * 60)
+            print("✅ 所有测试完成！")
+            print("=" * 60)
+
+            if perf_results:
+                print_perf_summary(perf_results)
         print("\n" + "=" * 60)
         print("✅ 功能测试完成！")
         print("=" * 60)
 
-        if args.stop_game:
-            print("\n" + "=" * 60)
-            print("⚠️  即将发送 TERMINATE 终止游戏进程")
-            print("=" * 60)
-            input("\n按 Enter 确认，Ctrl+C 取消...\n")
-            client.stop_game()
-
-        return 0
-
-        print("\n" + "=" * 60)
-        print("⚠️  即将执行性能测试（约 130 次操作，需 1~2 分钟）")
-        print("=" * 60)
-        input("\n按 Enter 开始，Ctrl+C 取消...\n")
-
-        perf_results = test_performance(client, width, height)
-
-        print("\n" + "=" * 60)
-        print("✅ 所有测试完成！")
-        print("=" * 60)
-
-        if perf_results:
-            print_perf_summary(perf_results)
-
-        # stop_game（可选，在所有测试最后执行）
         if args.stop_game:
             print("\n" + "=" * 60)
             print("⚠️  即将发送 TERMINATE 终止游戏进程")
