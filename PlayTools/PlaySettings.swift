@@ -80,6 +80,8 @@ let settings = PlaySettings.shared
 
     @objc lazy var maaToolsIPC = settingsData.maaToolsIPC
 
+    @objc lazy var maaToolsSocketName = settingsData.maaToolsSocketName as NSString
+
     @objc lazy var windowFixMethod = settingsData.windowFixMethod
 
     @objc lazy var customScaler = settingsData.customScaler
@@ -125,6 +127,7 @@ struct AppSettingsData: Codable {
     var maaTools = false
     var maaToolsPort = 1717
     var maaToolsIPC = false
+    var maaToolsSocketName = "maa_ipc.sock"
     var rootWorkDir = true
     var noKMOnInput = false
     var enableScrollWheel = true

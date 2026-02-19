@@ -71,21 +71,23 @@ final class MaaToolsIPC {
     // swiftlint:disable:next implicitly_unwrapped_optional
     nonisolated(unsafe) private var tid: Int?
 
+    // 手动设置的 socket 文件名（nil 表示使用 PlaySettings 中的配置）
+    private var manuallySetSocketName: String?
+    private var actualSocketName: String = ""
+
     // MARK: - Init
 
     private init() {
-        let tmpDir = (NSHomeDirectory() as NSString).appendingPathComponent("tmp")
-        try? FileManager.default.createDirectory(
-            atPath: tmpDir, withIntermediateDirectories: true
-        )
-        let socketPath = (tmpDir as NSString).appendingPathComponent("maa_ipc.sock")
+        // 延迟创建 server 至 initialize() 方法
+    }
 
-        let ipcServer = SandboxIPCServer(
-            socketPath: socketPath,
-            logger: Logger(subsystem: "PlayTools", category: "SandboxIPCServer")
-        )
-        ipcServer.delegate = self
-        self.server = ipcServer
+    // MARK: - Configuration
+
+    /// 手动设置 socket 文件名，优先级高于 PlaySettings 中的配置（可选）
+    /// - Parameter socketName: socket 文件名，如 "maa_ipc.sock" 或 "custom_socket.sock"
+    public func setCustomSocketName(_ socketName: String) {
+        self.manuallySetSocketName = socketName
+        logger.info("Custom socket name set (manually): \(socketName)")
     }
 
     // MARK: - Lifecycle
@@ -96,14 +98,73 @@ final class MaaToolsIPC {
             return
         }
         refreshScreenInfo()
+
+        // 确定最终使用的 socket 名称：优先级为 手动设置 > PlaySettings 中的配置
+        let socketNameToUse: String
+        if let manuallySet = manuallySetSocketName {
+            socketNameToUse = manuallySet
+            logger.info("Using manually set socket name: \(manuallySet)")
+        } else {
+            let settingsSocketName = PlaySettings.shared.maaToolsSocketName as String
+            socketNameToUse = settingsSocketName
+            logger.info("Using socket name from PlaySettings: \(settingsSocketName)")
+        }
+
+        // 创建 socket 文件路径
+        let tmpDir = (NSHomeDirectory() as NSString).appendingPathComponent("tmp")
+        try? FileManager.default.createDirectory(
+            atPath: tmpDir, withIntermediateDirectories: true
+        )
+        let socketPath = (tmpDir as NSString).appendingPathComponent(socketNameToUse)
+        self.actualSocketName = socketNameToUse
+
+        // 创建 IPC server
+        let ipcServer = SandboxIPCServer(
+            socketPath: socketPath,
+            logger: Logger(subsystem: "PlayTools", category: "SandboxIPCServer")
+        )
+        ipcServer.delegate = self
+        self.server = ipcServer
+
         server?.start()
-        logger.info("MaaToolsIPC initialized, socket listening for client...")
+        logger.info("MaaToolsIPC initialized, socket listening for client at: \(socketPath)")
+
+        // 更新窗口标题
+        updateWindowTitle()
     }
 
     func uninitialize() {
         server?.stop()
         cleanupSession()
         logger.info("MaaToolsIPC uninitialized")
+    }
+
+    // MARK: - Window Title Update
+
+    /// 更新窗口标题，在末尾添加 [socket_filename]
+    private func updateWindowTitle() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.actualSocketName.isEmpty else { return }
+
+            let window = UIApplication.shared.connectedScenes
+                .flatMap { ($0 as? UIWindowScene)?.windows ?? [] }
+                .first { $0.isKeyWindow }
+
+            guard let nsWindow = window?.nsWindow else { return }
+
+            // 通过 NSWindow 更新标题（使用 KVC）
+            if let nsWindowObject = nsWindow as? NSObject {
+                let currentTitle = nsWindowObject.value(forKey: "title") as? String ?? ""
+                // 避免重复添加 socket 名称
+                if !currentTitle.contains("[") || !currentTitle.contains("]") {
+                    let titleWithSocket = currentTitle + " [\(self.actualSocketName)]"
+                    nsWindowObject.setValue(titleWithSocket, forKey: "title")
+                    self.logger.info("Window title updated: \(titleWithSocket)")
+                } else {
+                    self.logger.debug("Window title already contains socket info: \(currentTitle)")
+                }
+            }
+        }
     }
 
     // MARK: - Screen Info
