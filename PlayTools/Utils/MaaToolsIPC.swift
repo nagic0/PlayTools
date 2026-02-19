@@ -91,8 +91,8 @@ final class MaaToolsIPC {
     // MARK: - Lifecycle
 
     func initialize() {
-        guard PlaySettings.shared.maaToolsShm else {
-            logger.info("MaaToolsIPC disabled (maaToolsShm = false)")
+        guard PlaySettings.shared.maaToolsIPC else {
+            logger.info("MaaToolsIPC disabled (maaToolsIPC = false)")
             return
         }
         refreshScreenInfo()

@@ -338,7 +338,7 @@ def main() -> int:
     print("前置条件：")
     print("  · PlayCover 应用已启动")
     print("  · 游戏已运行（PlayTools 已注入）")
-    print("  · maaToolsShm = true（在 PlaySettings 中启用）")
+    print("  · maaToolsIPC = true（在 PlaySettings 中启用）")
     print()
 
     input("准备好后按 Enter 继续...")
@@ -358,7 +358,7 @@ def main() -> int:
             print("\n❌ 连接失败")
             print("\n提示：")
             print("  · 确认游戏已启动并注入 PlayTools")
-            print("  · 确认 maaToolsShm 已在 PlaySettings 中启用")
+            print("  · 确认 maaToolsIPC 已在 PlaySettings 中启用")
             print("  · 使用 --bundle-id 或 --container 指定目标")
             return 1
 
