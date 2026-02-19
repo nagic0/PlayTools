@@ -89,11 +89,12 @@ private let MAA_TOOLS_VERSION = 2
                 DispatchQueue.main.async { [weak self] in
                     if let port = self?.listener?.port?.rawValue {
                         self?.logger.log("Server started and listening on port \(port, privacy: .public)")
-                        AKInterface.shared?.windowTitle = "\(self?.windowTitle ?? "") [localhost:\(port)]"
+                        AKInterface.shared?.setWindowTitleTag("maa_tcp", "[localhost:\(port)]")
                     }
                 }
             case .cancelled:
                 self?.logger.log("Server closed")
+                DispatchQueue.main.async { AKInterface.shared?.setWindowTitleTag("maa_tcp", nil) }
             case let .failed(error):
                 self?.logger.error("Server failed to start: \(error)")
             default:

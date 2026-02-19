@@ -96,21 +96,66 @@ class AKPlugin: NSObject, Plugin {
         NSApplication.shared.windows.first!.styleMask.contains(.fullScreen)
     }
 
+    // --- window title manager (base + tags) -------------------------
+    private var _windowTitleBase: String? = nil
+    private var _windowTitleTags: [String: String] = [:]
+
+    private func composeWindowTitle() -> String {
+        let base = (_windowTitleBase?.isEmpty == false) ? _windowTitleBase! : (NSApplication.shared.windows.first?.title ?? "")
+        let tags = _windowTitleTags.values.sorted()
+        if tags.isEmpty { return base }
+        return ([base] + tags).joined(separator: " ")
+    }
+
+    private func setWindowTitleBase(_ newBase: String?) {
+        _windowTitleBase = newBase ?? ""
+        NSApplication.shared.windows.first?.title = composeWindowTitle()
+    }
+
     var windowTitle: String? {
         get {
             NSApplication.shared.windows.first?.title
         }
         set {
-            if let newValue {
-                if Thread.isMainThread {
-                    NSApplication.shared.windows.first?.title = newValue
-                } else {
-                    DispatchQueue.main.async {
-                        NSApplication.shared.windows.first?.title = newValue
-                    }
+            let newBase = stripTrailingBracketTags(from: newValue ?? "")
+            if Thread.isMainThread {
+                setWindowTitleBase(newBase)
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.setWindowTitleBase(newBase)
                 }
             }
         }
+    }
+
+    func setWindowTitleTag(_ key: String, _ value: String?) {
+        if Thread.isMainThread {
+            if let titleValue = value { _windowTitleTags[key] = titleValue } else { _windowTitleTags.removeValue(forKey: key) }
+            NSApplication.shared.windows.first?.title = composeWindowTitle()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if let titleValue = value { self._windowTitleTags[key] = titleValue } else { self._windowTitleTags.removeValue(forKey: key) }
+                NSApplication.shared.windows.first?.title = self.composeWindowTitle()
+            }
+        }
+    }
+
+    private func stripTrailingBracketTags(from str: String) -> String {
+        var base = str.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let lastClose = base.lastIndex(of: "]"),
+              let lastOpen = base[..<lastClose].lastIndex(of: "[") {
+            // only strip if the closing bracket is at the end (allow trailing whitespace)
+            if base.distance(from: lastClose, to: base.endIndex) <= 1 {
+                let removeStart = (lastOpen > base.startIndex && base[base.index(before: lastOpen)] == " ")
+                    ? base.index(before: lastOpen) : lastOpen
+                base.removeSubrange(removeStart...lastClose)
+                base = base.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                break
+            }
+        }
+        return base
     }
 
     var windowImage: CGImage? {

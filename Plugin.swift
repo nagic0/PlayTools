@@ -34,6 +34,12 @@ public protocol Plugin: NSObjectProtocol {
     func setMenuBarVisible(_ value: Bool)
 
     var windowTitle: String? { get set }
+
+    /// Add or remove a window-title tag identified by `key`.
+    /// - If `value` is non-nil the tag is added/updated (value should include any surrounding brackets).
+    /// - If `value` is nil the tag for `key` is removed.
+    func setWindowTitleTag(_ key: String, _ value: String?)
+
     var windowImage: CGImage? { get }
     var windowImageLogical: CGImage? { get }
 }

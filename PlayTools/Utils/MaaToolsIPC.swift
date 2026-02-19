@@ -136,18 +136,18 @@ final class MaaToolsIPC {
         server?.start()
         logger.info("MaaToolsIPC initialized, socket listening for client at: \(socketPath)")
 
-        // 更新窗口标题，添加 socket 信息
+        // 更新窗口标题，添加 socket 信息（使用 tag 以避免互相覆盖）
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if let currentTitle = AKInterface.shared?.windowTitle {
-                AKInterface.shared?.windowTitle = "\(currentTitle) [\(self.actualSocketName)]"
-                self.logger.info("Window title updated: \(currentTitle) [\(self.actualSocketName)]")
-            }
+            AKInterface.shared?.setWindowTitleTag("maa_ipc", "[\(self.actualSocketName)]")
+            self.logger.info("Window title updated: \(AKInterface.shared?.windowTitle ?? "")")
         }
     }
 
     func uninitialize() {
         server?.stop()
+        // remove IPC title tag
+        DispatchQueue.main.async { AKInterface.shared?.setWindowTitleTag("maa_ipc", nil) }
         cleanupSession()
         logger.info("MaaToolsIPC uninitialized")
     }
