@@ -246,11 +246,10 @@ class AKPlugin: NSObject, Plugin {
         // Try Cocoa termination first (gives app a chance to clean up)
         NSApplication.shared.terminate(self)
 
-        // Immediate synchronous fallback: ensure the process exits even if the app
-        // is background-suspended or the main runloop doesn't process timers.
-        // Using exit(0) here guarantees the process will terminate now.
-        logger.warning("terminateApplication(): synchronous exit(0) fallback executing")
-        exit(0)
+        // Immediate synchronous fallback: if exit/atexit handlers block, directly
+        // send SIGKILL to ensure the process is removed from the process table.
+        logger.warning("terminateApplication(): SIGKILL fallback executing — killing pid \(Int(getpid()))")
+        kill(getpid(), SIGKILL)
     }
 
     private var modifierFlag: UInt = 0
