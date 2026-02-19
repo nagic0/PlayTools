@@ -349,8 +349,17 @@ final class MaaToolsIPC {
             logger.info("TERMINATE seq=\(cmd.seqId) — terminating app")
             // 先回 ACK，再退出，保证客户端能收到确认
             sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
+
+            // Trigger normal termination on main actor (allows graceful cleanup)
             await MainActor.run {
                 AKInterface.shared?.terminateApplication()
+            }
+
+            // Extra safety: ensure process is killed if it somehow remains alive.
+            // Schedule a SIGKILL fallback in case graceful flows don't exit the process.
+            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) {
+                self.logger.error("TERMINATE fallback: SIGKILL pid=\(Int(getpid()))")
+                kill(getpid(), SIGKILL)
             }
         }
     }
