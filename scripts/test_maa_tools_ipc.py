@@ -200,59 +200,6 @@ def test_performance(client: MaaToolsIPC, width: int, height: int) -> dict:
         results['screenshot'] = dict(success=ok_count, total=10,
                                      avg=avg, mn=min(times), mx=max(times), fps=fps)
 
-    # ── 测试 8：批量点击延迟（100 次）─────────────────────────
-    print("\n🎯 测试 8: 批量点击延迟（100 次，duration=10ms）")
-    times = []
-    ok_count = 0
-    cx, cy = width // 2, height // 2
-
-    total_start = time.perf_counter()
-    for i in range(100):
-        px = cx + (i % 10 - 5) * 10
-        py = cy + (i // 10 - 5) * 10
-        start = time.perf_counter()
-        ok = client.tap(px, py, duration=10)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        if ok:
-            times.append(elapsed_ms)
-            ok_count += 1
-    total_ms = (time.perf_counter() - total_start) * 1000
-
-    if times:
-        _perf_summary("点击", ok_count, 100, times)
-        throughput = ok_count / (total_ms / 1000) if total_ms > 0 else 0
-        print(f"   总耗时: {total_ms:.2f}ms  |  吞吐率: {throughput:.1f} 次/秒")
-        results['tap'] = dict(success=ok_count, total=100, total_time=total_ms,
-                              avg=sum(times)/len(times), mn=min(times), mx=max(times),
-                              throughput=throughput)
-
-    # ── 测试 9：连续滑动（20 次）──────────────────────────────
-    print("\n🎯 测试 9: 连续滑动（20 次，duration=300ms）")
-    times = []
-    ok_count = 0
-
-    total_start = time.perf_counter()
-    for i in range(20):
-        if i % 2 == 0:
-            sx1, sy1, sx2, sy2 = width // 4, height // 2, width * 3 // 4, height // 2
-        else:
-            sx1, sy1, sx2, sy2 = width * 3 // 4, height // 2, width // 4, height // 2
-
-        start = time.perf_counter()
-        ok = client.swipe(sx1, sy1, sx2, sy2, 300)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        if ok:
-            times.append(elapsed_ms)
-            ok_count += 1
-        time.sleep(0.05)  # 50ms 间隔，避免过度占用
-    total_ms = (time.perf_counter() - total_start) * 1000
-
-    if times:
-        _perf_summary("滑动", ok_count, 20, times)
-        print(f"   总耗时: {total_ms:.2f}ms")
-        results['swipe'] = dict(success=ok_count, total=20, total_time=total_ms,
-                                avg=sum(times)/len(times), mn=min(times), mx=max(times))
-
     return results
 
 
@@ -280,20 +227,6 @@ def print_perf_summary(results: dict):
         print(f"   成功率: {s['success']}/{s['total']} ({s['success']/s['total']*100:.1f}%)")
         print(f"   平均: {s['avg']:.2f}ms  最快: {s['mn']:.2f}ms  最慢: {s['mx']:.2f}ms")
         print(f"   理论帧率: {s['fps']:.1f} FPS")
-
-    if 'tap' in results:
-        t = results['tap']
-        print(f"\n👆 点击性能:")
-        print(f"   成功率: {t['success']}/{t['total']} ({t['success']/t['total']*100:.1f}%)")
-        print(f"   平均: {t['avg']:.2f}ms  最快: {t['mn']:.2f}ms  最慢: {t['mx']:.2f}ms")
-        print(f"   总耗时: {t['total_time']:.2f}ms  吞吐率: {t['throughput']:.1f} 次/秒")
-
-    if 'swipe' in results:
-        sw = results['swipe']
-        print(f"\n↔️  滑动性能:")
-        print(f"   成功率: {sw['success']}/{sw['total']} ({sw['success']/sw['total']*100:.1f}%)")
-        print(f"   平均: {sw['avg']:.2f}ms  最快: {sw['mn']:.2f}ms  最慢: {sw['mx']:.2f}ms")
-        print(f"   总耗时: {sw['total_time']:.2f}ms")
 
     print("\n" + "=" * 60)
 
@@ -334,8 +267,6 @@ def main() -> int:
     print("  6. DRAG         拖拽（含 100ms 长按）")
     if not args.no_perf:
         print("  7. 截图帧率测试（10 次）")
-        print("  8. 批量点击延迟（100 次）")
-        print("  9. 连续滑动（20 次）")
     if args.stop_game:
         print("  *. TERMINATE    终止游戏进程（所有测试完成后执行）")
     print()
@@ -381,7 +312,7 @@ def main() -> int:
         # 性能测试
         if not args.no_perf:
             print("\n" + "=" * 60)
-            print("⚠️  即将执行性能测试（约 130 次操作，需 1~2 分钟）")
+            print("⚠️  即将执行性能测试（10 次连续截图）")
             print("=" * 60)
             input("\n按 Enter 开始，Ctrl+C 取消...\n")
 

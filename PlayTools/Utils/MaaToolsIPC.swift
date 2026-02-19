@@ -378,19 +378,31 @@ final class MaaToolsIPC {
         var ciImage = CIImage(cgImage: cgImage)
 
         // 2. 裁剪标题栏
-        //    CIImage 坐标系原点在左下角，而 CGImage 的标题栏位于顶部（CGImage y=0）。
-        //    换算：保留 CIImage 中 y=0 ~ y=(totalHeight-titleBarHeight) 的内容区域。
-        let titleBarHeight = cgImage.height - cgImage.width * screenHeight / screenWidth
+        //    titleBarHeight 用图像像素计算，适配 Retina（2x）和逻辑分辨率两种输入。
+        //    CIImage 坐标系原点在左下角，标题栏在 CGImage 顶部 = CIImage 高端，
+        //    因此保留 y=0 ~ y=(srcHeight-titleBarHeight) 即可去掉标题栏。
+        let srcWidth    = cgImage.width
+        let srcHeight   = cgImage.height
+        let titleBarHeight = srcHeight - srcWidth * screenHeight / screenWidth
+        let contentHeight  = srcHeight - titleBarHeight   // 内容区高度（图像像素）
+
         if titleBarHeight > 0 {
-            let cropRect = CGRect(x: 0,
-                                  y: 0,
-                                  width: cgImage.width,
-                                  height: cgImage.height - titleBarHeight)
-            ciImage = ciImage.cropped(to: cropRect)
+            ciImage = ciImage.cropped(to: CGRect(x: 0, y: 0,
+                                                  width: srcWidth,
+                                                  height: contentHeight))
         }
 
-        // 3. GPU 硬件加速一次性完成：裁剪 + P3→sRGB 色域转换 + BGRA 格式化 + 写入共享内存
-        //    ciContext.render 直接写入 capPtr（共享内存），Python 侧可立即读取（零拷贝）。
+        // 3. 缩放到输出分辨率
+        //    CGWindowListCreateImage 在部分 macOS 版本上即使不指定 bestResolution
+        //    也可能返回 Retina（2x）像素图；加缩放步骤确保输出严格等于 screenWidth×screenHeight，
+        //    同时兼容逻辑分辨率（srcWidth==screenWidth 时 scale=1.0，GPU 不做额外采样）。
+        if srcWidth != screenWidth || contentHeight != screenHeight {
+            let sx = CGFloat(screenWidth)  / CGFloat(srcWidth)
+            let sy = CGFloat(screenHeight) / CGFloat(contentHeight)
+            ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        }
+
+        // 4. GPU 一次性完成：色域转换（P3→sRGB）+ BGRA 格式化 + 写入共享内存（零拷贝）
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
         ciContext.render(
             ciImage,

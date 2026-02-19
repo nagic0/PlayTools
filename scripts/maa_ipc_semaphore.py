@@ -818,7 +818,7 @@ class MaaToolsIPC:
         if not self.touch_down(x1, y1):
             print(f"❌ 滑动失败 (down): ({x1}, {y1})")
             return False
-        time.sleep(0.010)  # 10ms 稳定触点
+        # time.sleep(0.010)  # 10ms 稳定触点
 
         for i in range(1, steps):
             t = i / steps

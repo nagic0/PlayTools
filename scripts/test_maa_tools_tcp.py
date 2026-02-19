@@ -500,100 +500,6 @@ def test_performance(client: MaaToolsTCPClient, width: int, height: int) -> dict
             'fps': fps
         }
     
-    # 测试8：批量点击（延迟测试）
-    print("\n🎯 测试 8: 批量点击延迟测试（100次）")
-    times = []
-    success_count = 0
-    
-    x_base, y_base = width // 2, height // 2
-    
-    total_start = time.time()
-    for i in range(100):
-        # 在中心点附近随机点击
-        x = x_base + (i % 10 - 5) * 10
-        y = y_base + (i // 10 - 5) * 10
-        
-        start = time.time()
-        success = client.tap(x, y, duration=0.01)  # 快速点击
-        elapsed = (time.time() - start) * 1000
-        
-        if success:
-            times.append(elapsed)
-            success_count += 1
-    
-    total_elapsed = (time.time() - total_start) * 1000
-    
-    if times:
-        avg_time = sum(times) / len(times)
-        max_time = max(times)
-        min_time = min(times)
-        
-        print(f"\n   📊 统计:")
-        print(f"   成功: {success_count}/100")
-        print(f"   总耗时: {total_elapsed:.2f}ms")
-        print(f"   平均延迟: {avg_time:.2f}ms")
-        print(f"   最快: {min_time:.2f}ms")
-        print(f"   最慢: {max_time:.2f}ms")
-        print(f"   吞吐率: {success_count / (total_elapsed / 1000):.1f} 次/秒")
-        
-        results['tap'] = {
-            'success': success_count,
-            'total': 100,
-            'total_time': total_elapsed,
-            'avg_time': avg_time,
-            'min_time': min_time,
-            'max_time': max_time,
-            'throughput': success_count / (total_elapsed / 1000)
-        }
-    
-    # 测试9：连续滑动
-    print("\n🎯 测试 9: 连续滑动测试（20次）")
-    times = []
-    success_count = 0
-    
-    total_start = time.time()
-    for i in range(20):
-        # 水平滑动
-        if i % 2 == 0:
-            x1, y1 = width // 4, height // 2
-            x2, y2 = width * 3 // 4, height // 2
-        else:
-            x1, y1 = width * 3 // 4, height // 2
-            x2, y2 = width // 4, height // 2
-        
-        start = time.time()
-        success = client.swipe(x1, y1, x2, y2, 0.3)  # 300ms 快速滑动
-        elapsed = (time.time() - start) * 1000
-        
-        if success:
-            times.append(elapsed)
-            success_count += 1
-        
-        time.sleep(0.05)
-    
-    total_elapsed = (time.time() - total_start) * 1000
-    
-    if times:
-        avg_time = sum(times) / len(times)
-        max_time = max(times)
-        min_time = min(times)
-        
-        print(f"\n   📊 统计:")
-        print(f"   成功: {success_count}/20")
-        print(f"   总耗时: {total_elapsed:.2f}ms")
-        print(f"   平均延迟: {avg_time:.2f}ms")
-        print(f"   最快: {min_time:.2f}ms")
-        print(f"   最慢: {max_time:.2f}ms")
-        
-        results['swipe'] = {
-            'success': success_count,
-            'total': 20,
-            'total_time': total_elapsed,
-            'avg_time': avg_time,
-            'min_time': min_time,
-            'max_time': max_time
-        }
-    
     return results
 
 
@@ -620,8 +526,6 @@ def main():
     print("  5. 触摸滑动")
     print("  6. 触摸拖拽")
     print("  7. 截图帧率测试（10次连续截图）")
-    print("  8. 批量点击延迟测试（100次点击）")
-    print("  9. 连续滑动测试（20次滑动）")
     print()
     print("请确保:")
     print("  - PlayCover 应用正在运行")
@@ -656,8 +560,7 @@ def main():
         
         # 性能测试
         print("\n" + "="*60)
-        print("⚠️  即将开始性能测试")
-        print("   这将执行大量操作（130次），可能需要 1-2 分钟")
+        print("⚠️  即将开始性能测试（10次连续截图）")
         print("="*60)
         input("\n按 Enter 继续性能测试，或 Ctrl+C 跳过...")
         
@@ -682,25 +585,6 @@ def main():
                 print(f"   最快: {s['min_time']:.2f}ms")
                 print(f"   最慢: {s['max_time']:.2f}ms")
                 print(f"   理论帧率: {s['fps']:.1f} FPS")
-            
-            if 'tap' in perf_results:
-                t = perf_results['tap']
-                print(f"\n👆 点击性能:")
-                print(f"   成功率: {t['success']}/{t['total']} ({t['success']/t['total']*100:.1f}%)")
-                print(f"   总耗时: {t['total_time']:.2f}ms")
-                print(f"   平均延迟: {t['avg_time']:.2f}ms")
-                print(f"   最快: {t['min_time']:.2f}ms")
-                print(f"   最慢: {t['max_time']:.2f}ms")
-                print(f"   吞吐率: {t['throughput']:.1f} 次/秒")
-            
-            if 'swipe' in perf_results:
-                sw = perf_results['swipe']
-                print(f"\n↔️  滑动性能:")
-                print(f"   成功率: {sw['success']}/{sw['total']} ({sw['success']/sw['total']*100:.1f}%)")
-                print(f"   总耗时: {sw['total_time']:.2f}ms")
-                print(f"   平均延迟: {sw['avg_time']:.2f}ms")
-                print(f"   最快: {sw['min_time']:.2f}ms")
-                print(f"   最慢: {sw['max_time']:.2f}ms")
             
             print("\n" + "="*60)
         
