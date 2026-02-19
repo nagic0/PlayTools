@@ -8,6 +8,8 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import Darwin
+import OSLog
 
 // Add a lightweight struct so we can decode only the flag we care about
 private struct AKAppSettingsData: Codable {
@@ -18,7 +20,10 @@ private struct AKAppSettingsData: Codable {
     var resizableAspectRatioHeight: Int?
 }
 
+// swiftlint:disable type_body_length
 class AKPlugin: NSObject, Plugin {
+    private let logger = Logger(subsystem: "PlayTools", category: "AKPlugin")
+
     required override init() {
         super.init()
         if let window = NSApplication.shared.windows.first {
@@ -129,13 +134,33 @@ class AKPlugin: NSObject, Plugin {
     }
 
     func setWindowTitleTag(_ key: String, _ value: String?) {
+        // Ensure base is canonicalized from the existing window title the first time we set a tag.
+        func ensureBaseInitialized() {
+            if _windowTitleBase == nil || _windowTitleBase?.isEmpty == true {
+                let current = NSApplication.shared.windows.first?.title ?? ""
+                // strip ANY bracketed tags from the existing window title so they
+                // don't survive as part of the base and cause duplicate tags
+                _windowTitleBase = stripAllBracketTags(from: current)
+            }
+        }
+
         if Thread.isMainThread {
-            if let titleValue = value { _windowTitleTags[key] = titleValue } else { _windowTitleTags.removeValue(forKey: key) }
+            ensureBaseInitialized()
+            if let titleValue = value {
+                _windowTitleTags[key] = titleValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                _windowTitleTags.removeValue(forKey: key)
+            }
             NSApplication.shared.windows.first?.title = composeWindowTitle()
         } else {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                if let titleValue = value { self._windowTitleTags[key] = titleValue } else { self._windowTitleTags.removeValue(forKey: key) }
+                ensureBaseInitialized()
+                if let titleValue = value {
+                    self._windowTitleTags[key] = titleValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    self._windowTitleTags.removeValue(forKey: key)
+                }
                 NSApplication.shared.windows.first?.title = self.composeWindowTitle()
             }
         }
@@ -156,6 +181,19 @@ class AKPlugin: NSObject, Plugin {
             }
         }
         return base
+    }
+
+    /// Remove any bracketed segments anywhere in the string (used only when
+    /// initializing the internal base from an existing window title).
+    private func stripAllBracketTags(from str: String) -> String {
+        var titleStr = str
+        while let open = titleStr.firstIndex(of: "["),
+              let close = titleStr[open...].firstIndex(of: "]") {
+            let start = (open > titleStr.startIndex && titleStr[titleStr.index(before: open)] == " ") ? titleStr.index(before: open) : open
+            titleStr.removeSubrange(start...close)
+            titleStr = titleStr.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return titleStr
     }
 
     var windowImage: CGImage? {
@@ -203,7 +241,38 @@ class AKPlugin: NSObject, Plugin {
     }
 
     func terminateApplication() {
+        logger.info("terminateApplication() requested — attempting graceful terminate")
+
+        // 1) Normal Cocoa termination (gives app a chance to clean up)
         NSApplication.shared.terminate(self)
+
+        // 2) Short graceful fallback: exit(0) so atexit handlers run
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+            self.logger.warning("terminateApplication(): exit(0) fallback executing")
+            exit(0)
+        }
+
+        // 3) Try to force-terminate any other running instances with the same bundle id
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            if let bundleID = Bundle.main.bundleIdentifier {
+                let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                for app in apps {
+                    // skip current process
+                    if app.processIdentifier == getpid() { continue }
+                    self.logger.warning("terminateApplication(): forceTerminating other instance pid=\(app.processIdentifier)")
+                    _ = app.forceTerminate()
+                }
+            }
+        }
+
+        // 4) Final guaranteed fallback: SIGKILL after a short delay
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self else { return }
+            self.logger.error("terminateApplication(): SIGKILL fallback — killing pid \(Int(getpid()))")
+            kill(getpid(), SIGKILL)
+        }
     }
 
     private var modifierFlag: UInt = 0
