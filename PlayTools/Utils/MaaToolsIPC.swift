@@ -12,8 +12,9 @@
 //  · 混合自旋等待（Hybrid Spin-Wait）：先自旋 200 次，高频 burst 时避免 sem_wait
 //    内核上下文切换，显著降低连续操作的端到端延迟
 //  · Drain Loop：被唤醒后一次性处理所有积压命令，减少不必要的 sem_wait
-//  · CGContext 复用：截图时复用 CGContext，避免每帧重建 Context 的分配开销
-//  · 零拷贝截图：CGContext 数据区直接指向共享内存，渲染完成即可被 Python 读取
+//  · Core Image GPU 加速截图：CIContext 进程级复用，裁剪 + P3→sRGB 色域转换 +
+//    BGRA 格式输出由 Metal/GPU 一次完成，CPU 几乎零参与
+//  · 零拷贝截图：ciContext.render 直接写入共享内存，Python 侧可立即读取
 //
 //  【架构清晰】
 //  · SandboxIPCServer   只管 Unix Socket 传输 + fd 传递（无业务逻辑）
@@ -21,6 +22,7 @@
 //  · MaaToolsIPC（本文件） 只管业务调度（截图/触控/查询）
 //
 
+import CoreImage
 import Foundation
 import UIKit
 import OSLog
@@ -56,8 +58,12 @@ final class MaaToolsIPC {
     private var cmdSemName: String = ""
     private var eventSemName: String = ""
 
-    // 截图 CGContext 缓存（数据区 = screencapBasePtr，无需重建）
-    private var cachedContext: CGContext?
+    // Core Image 上下文（进程级复用，Metal 初始化仅一次）
+    // workingColorSpace = nil：跳过不必要的中间色彩空间转换，让 GPU 直接走最短路径
+    private let ciContext = CIContext(options: [
+        .workingColorSpace: NSNull(),
+        .cacheIntermediates: false
+    ])
 
     // 屏幕信息（主线程写，其他线程只读）
     private var screenWidth: Int = 0
@@ -202,9 +208,9 @@ final class MaaToolsIPC {
         }
 
         // 清理引用
-        cmdRing       = nil
-        eventRing     = nil
-        cachedContext = nil  // Context 指向 screencapBasePtr，必须在 munmap 后置 nil
+        cmdRing   = nil
+        eventRing = nil
+        // ciContext 是进程级 let 常量，不随 Session 清理
 
         logger.info("🧹 Session cleaned up")
     }
@@ -351,7 +357,7 @@ final class MaaToolsIPC {
     /// 注意：必须在主线程调用（UIKit / CoreGraphics 要求）
     @MainActor
     private func captureToSharedMemory() -> Bool {
-        guard let image = AKInterface.shared?.windowImage else {
+        guard let cgImage = AKInterface.shared?.windowImage else {
             logger.error("windowImage unavailable")
             return false
         }
@@ -365,45 +371,33 @@ final class MaaToolsIPC {
             return false
         }
 
-        // 裁剪标题栏（macOS Catalyst 窗口包含标题栏，保留纯游戏内容区域）
-        let titleBarHeight = image.height - image.width * screenHeight / screenWidth
-        let contentRect = CGRect(x: 0, y: titleBarHeight,
-                                 width: image.width,
-                                 height: image.height - titleBarHeight)
-        guard let cropped = image.cropping(to: contentRect) else {
-            logger.error("Failed to crop image (titleBarHeight=\(titleBarHeight))")
-            return false
+        // 1. 将 CGImage 包装为 CIImage（零成本，不触发任何像素拷贝）
+        var ciImage = CIImage(cgImage: cgImage)
+
+        // 2. 裁剪标题栏
+        //    CIImage 坐标系原点在左下角，而 CGImage 的标题栏位于顶部（CGImage y=0）。
+        //    换算：保留 CIImage 中 y=0 ~ y=(totalHeight-titleBarHeight) 的内容区域。
+        let titleBarHeight = cgImage.height - cgImage.width * screenHeight / screenWidth
+        if titleBarHeight > 0 {
+            let cropRect = CGRect(x: 0,
+                                  y: 0,
+                                  width: cgImage.width,
+                                  height: cgImage.height - titleBarHeight)
+            ciImage = ciImage.cropped(to: cropRect)
         }
 
-        // ── CGContext 复用 ──────────────────────────────────────
-        // Context 数据区直接指向 screencapBasePtr（共享内存），
-        // 只要 Session 未断开，screencapBasePtr 地址不变，Context 可复用。
-        // 避免每帧约 ~100µs 的 CGContext 分配 + 初始化开销。
-        if cachedContext == nil {
-            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-            let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
-                           | CGBitmapInfo.byteOrder32Little.rawValue
-            cachedContext = CGContext(
-                data: capPtr,
-                width: screenWidth,
-                height: screenHeight,
-                bitsPerComponent: 8,
-                bytesPerRow: screenWidth * 4,
-                space: colorSpace,
-                bitmapInfo: bitmapInfo
-            )
-            logger.debug("CGContext created for \(self.screenWidth)×\(self.screenHeight)")
-        }
+        // 3. GPU 硬件加速一次性完成：裁剪 + P3→sRGB 色域转换 + BGRA 格式化 + 写入共享内存
+        //    ciContext.render 直接写入 capPtr（共享内存），Python 侧可立即读取（零拷贝）。
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+        ciContext.render(
+            ciImage,
+            toBitmap: capPtr,
+            rowBytes: screenWidth * 4,
+            bounds: CGRect(x: 0, y: 0, width: screenWidth, height: screenHeight),
+            format: .BGRA8,
+            colorSpace: sRGB
+        )
 
-        guard let ctx = cachedContext else {
-            logger.error("Failed to create CGContext")
-            return false
-        }
-
-        // 直接渲染到共享内存（零拷贝，Python 侧可立即读取）
-        ctx.draw(cropped, in: CGRect(x: 0, y: 0,
-                                     width: screenWidth,
-                                     height: screenHeight))
         return true
     }
 
