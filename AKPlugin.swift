@@ -243,36 +243,14 @@ class AKPlugin: NSObject, Plugin {
     func terminateApplication() {
         logger.info("terminateApplication() requested — attempting graceful terminate")
 
-        // 1) Normal Cocoa termination (gives app a chance to clean up)
+        // Try Cocoa termination first (gives app a chance to clean up)
         NSApplication.shared.terminate(self)
 
-        // 2) Short graceful fallback: exit(0) so atexit handlers run
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self = self else { return }
-            self.logger.warning("terminateApplication(): exit(0) fallback executing")
-            exit(0)
-        }
-
-        // 3) Try to force-terminate any other running instances with the same bundle id
-        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            guard let self = self else { return }
-            if let bundleID = Bundle.main.bundleIdentifier {
-                let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-                for app in apps {
-                    // skip current process
-                    if app.processIdentifier == getpid() { continue }
-                    self.logger.warning("terminateApplication(): forceTerminating other instance pid=\(app.processIdentifier)")
-                    _ = app.forceTerminate()
-                }
-            }
-        }
-
-        // 4) Final guaranteed fallback: SIGKILL after a short delay
-        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self else { return }
-            self.logger.error("terminateApplication(): SIGKILL fallback — killing pid \(Int(getpid()))")
-            kill(getpid(), SIGKILL)
-        }
+        // Immediate synchronous fallback: ensure the process exits even if the app
+        // is background-suspended or the main runloop doesn't process timers.
+        // Using exit(0) here guarantees the process will terminate now.
+        logger.warning("terminateApplication(): synchronous exit(0) fallback executing")
+        exit(0)
     }
 
     private var modifierFlag: UInt = 0
