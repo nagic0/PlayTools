@@ -53,13 +53,17 @@ func ipc_CMSG_DATA(_ cmsg: UnsafeMutablePointer<cmsghdr>) -> UnsafeMutableRawPoi
 // MARK: - 命令类型枚举
 
 /// IPC 命令类型（外部 → App）
+/// 触摸协议与 TCP 版（MaaTools.swift TUCH 命令）保持一致：
+/// 上层不再发送高层 tap/swipe/drag，改为逐帧发送 touchDown/touchMove/touchUp，
+/// 插值、时序全部由 C++ Controller 负责。
 enum IPCCommandType: UInt8 {
     case screenshot  = 0   // 截图
-    case tap         = 1   // 点击
-    case swipe       = 2   // 滑动
-    case drag        = 3   // 拖拽（长按后移动）
+    case touchDown   = 1   // 触摸按下（对应 UITouch.Phase.began）
+    case touchMove   = 2   // 触摸移动（对应 UITouch.Phase.moved）
+    case touchUp     = 3   // 触摸抬起（对应 UITouch.Phase.ended）
     case getSize     = 4   // 查询屏幕尺寸
     case getVersion  = 5   // 查询协议版本
+    case terminate   = 6   // 终止游戏进程（对应 TCP 的 TERM 命令）
 }
 
 /// IPC 事件类型（App → 外部）
@@ -140,8 +144,11 @@ enum IPCConfig {
     /// 事件环形缓冲区数据区的起始偏移
     static let eventRingOffset = headerSize + ringCapacity * cmdPacketSize
 
-    /// 当前协议版本号
-    static let protocolVersion: UInt32 = 1
+    /// 当前协议版本号（对应 TCP 侧 MinimalVersion = 2）
+    static let protocolVersion: UInt32 = 2
+
+    /// 服务端所需的最低客户端协议版本
+    static let minimalVersion: UInt32 = 2
 
     /// 屏幕尺寸编码：encode(w, h) → Int32
     /// 低 16 位 = 宽度，高 16 位 = 高度

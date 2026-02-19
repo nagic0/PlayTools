@@ -112,14 +112,17 @@ Screencap SHM (由 Python 创建，通过 fd 传给 Swift)
 
 ### 命令/事件类型
 
-| 命令 (Python → Swift) | 值 | 说明                            |
-|-----------------------|----|-------------------------------|
-| `CMD_SCREENSHOT`      | 0  | 截图，结果写入 Screencap SHM     |
-| `CMD_TAP`             | 1  | 点击 (x, y, duration)           |
-| `CMD_SWIPE`           | 2  | 滑动 (x1,y1) → (x2,y2, duration)|
-| `CMD_DRAG`            | 3  | 拖拽（长按后移动）                |
-| `CMD_GET_SIZE`        | 4  | 查询屏幕尺寸                     |
-| `CMD_GET_VERSION`     | 5  | 查询协议版本号                   |
+| 命令 (客户端 → Swift) | 值 | 说明                                              |
+|-----------------------|----|--------------------------------------------------|
+| `CMD_SCREENSHOT`      | 0  | 截图，结果写入 Screencap SHM                      |
+| `CMD_TOUCH_DOWN`      | 1  | 触摸按下 (x, y) — 对应 TCP TUCH/phase=0           |
+| `CMD_TOUCH_MOVED`     | 2  | 触摸移动 (x, y) — 对应 TCP TUCH/phase=1           |
+| `CMD_TOUCH_UP`        | 3  | 触摸抬起 (x, y) — 对应 TCP TUCH/phase=3           |
+| `CMD_GET_SIZE`        | 4  | 查询屏幕尺寸                                      |
+| `CMD_GET_VERSION`     | 5  | 查询协议版本号                                    |
+| `CMD_TERMINATE`       | 6  | 终止游戏进程                                      |
+
+> **注意**：协议不再提供高层 TAP/SWIPE/DRAG 命令。触摸时序与插值由调用方（C++ Controller 或 Python 客户端）负责，Swift 侧仅做最小单元的触发并立即 ACK，与 TCP 协议完全一致。
 
 | 事件 (Swift → Python) | 值 | 说明                                         |
 |-----------------------|----|---------------------------------------------|

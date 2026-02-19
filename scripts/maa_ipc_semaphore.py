@@ -67,13 +67,19 @@ O_EXCL = 0x0800
 # 协议定义
 # ============================================================
 
-# 命令类型
-CMD_SCREENSHOT = 0
-CMD_TAP = 1
-CMD_SWIPE = 2
-CMD_DRAG = 3
-CMD_GET_SIZE = 4
+# 命令类型（与 Swift IPCCommandType 枚举以及 C++ IPCCommandType 严格对齐）
+# 触摸协议与 TCP 版（TUCH 命令）完全一致：由客户端负责插值/时序，
+# 服务端只做最小单元的 down / move / up 触发并立即 ACK。
+CMD_SCREENSHOT  = 0
+CMD_TOUCH_DOWN  = 1   # UITouch.Phase.began
+CMD_TOUCH_MOVED = 2   # UITouch.Phase.moved
+CMD_TOUCH_UP    = 3   # UITouch.Phase.ended
+CMD_GET_SIZE    = 4
 CMD_GET_VERSION = 5
+CMD_TERMINATE   = 6   # 终止游戏（对应 TCP 的 TERM 命令）
+
+# 最低支持的协议版本（对应 TCP 侧 MinimalVersion = 2）
+MINIMAL_VERSION = 2
 
 # 事件类型
 EVENT_SCREENSHOT_READY = 0
@@ -171,11 +177,33 @@ class MaaToolsIPC:
         if not self._unix_socket_connect():
             self._cleanup()
             return False
-        
+
+        # 版本校验（对应 TCP check_version）：版本低于 MinimalVersion 则拒绝连接
+        if not self._check_version():
+            self._cleanup()
+            return False
+
         self.connected = True
         print("✅ MaaTools IPC 连接成功\n")
         return True
     
+    def _check_version(self) -> bool:
+        """*连接建立后*自动调用：校验服务端协议版本是否满足最低要求。
+
+        对应 TCP PlayToolsController::check_version()。
+        """
+        seq_id = self._send_command(CMD_GET_VERSION)
+        event = self._wait_event(timeout=5.0)
+        if not event or event[0] != EVENT_VERSION_INFO or event[1] != seq_id:
+            print(f"❌ 版本查询失败: {event}")
+            return False
+        version = event[2]
+        if version < MINIMAL_VERSION:
+            print(f"❌ PlayTools 版本过低: {version} < {MINIMAL_VERSION}，请升级 PlayTools")
+            return False
+        print(f"✅ PlayTools 协议版本: {version} (最低要求: {MINIMAL_VERSION})")
+        return True
+
     def _create_shared_memory(self) -> bool:
         """创建 POSIX 共享内存"""
         # 先清理可能存在的旧共享内存
@@ -713,62 +741,133 @@ class MaaToolsIPC:
         except queue.Empty:
             return None
     
-    def tap(self, x: int, y: int, duration: int = 50) -> bool:
-        """点击"""
+    def stop_game(self) -> bool:
+        """终止游戏进程（对应 TCP 的 TERM 命令）"""
         if not self.connected:
             print("❌ 未连接或连接已断开")
             return False
-        
+
         start = time.perf_counter()
-        seq_id = self._send_command(CMD_TAP, x, y, duration=duration)
-        
+        seq_id = self._send_command(CMD_TERMINATE)
+
+        # 等待 ACK（服务端回 ACK 后才 execute exit，当前连接可能随即断开）
+        event = self._wait_event(timeout=3.0)
+        latency = (time.perf_counter() - start) * 1000
+
+        if event and event[0] == EVENT_ACK and event[1] == seq_id:
+            print(f"✅ 终止游戏指令已发送: 延迟 {latency:.1f}ms")
+            return True
+        else:
+            # 服务端可能已经退出，连接断开同样认为成功
+            print(f"⚠️  终止游戏无确认（服务端可能已退出）: {event}")
+            return True
+
+    def touch_down(self, x: int, y: int) -> bool:
+        """触摸按下（对应 TCP TUCH/phase=0）"""
+        if not self.connected:
+            return False
+        seq_id = self._send_command(CMD_TOUCH_DOWN, x, y)
         event = self._wait_event()
-        latency = (time.perf_counter() - start) * 1000
-        
-        if event and event[0] == EVENT_ACK and event[1] == seq_id:
-            print(f"✅ 点击成功 ({x}, {y}): 延迟 {latency:.1f}ms")
-            return True
-        else:
-            print(f"❌ 点击失败: {event}")
+        return bool(event and event[0] == EVENT_ACK and event[1] == seq_id)
+
+    def touch_move(self, x: int, y: int) -> bool:
+        """触摸移动（对应 TCP TUCH/phase=1）"""
+        if not self.connected:
             return False
-    
+        seq_id = self._send_command(CMD_TOUCH_MOVED, x, y)
+        event = self._wait_event()
+        return bool(event and event[0] == EVENT_ACK and event[1] == seq_id)
+
+    def touch_up(self, x: int, y: int) -> bool:
+        """触摸抬起（对应 TCP TUCH/phase=3）"""
+        if not self.connected:
+            return False
+        seq_id = self._send_command(CMD_TOUCH_UP, x, y)
+        event = self._wait_event()
+        return bool(event and event[0] == EVENT_ACK and event[1] == seq_id)
+
+    def tap(self, x: int, y: int, duration: int = 50) -> bool:
+        """点击（由 touch_down + sleep + touch_up 组合，与 TCP 版保持一致）"""
+        if not self.connected:
+            print("❌ 未连接或连接已断开")
+            return False
+
+        start = time.perf_counter()
+        if not self.touch_down(x, y):
+            print(f"❌ 点击失败 (down): ({x}, {y})")
+            return False
+        time.sleep(duration / 1000.0)
+        if not self.touch_up(x, y):
+            print(f"❌ 点击失败 (up): ({x}, {y})")
+            return False
+
+        latency = (time.perf_counter() - start) * 1000
+        print(f"✅ 点击成功 ({x}, {y}): 延迟 {latency:.1f}ms")
+        return True
+
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration: int = 300) -> bool:
-        """滑动"""
+        """滑动（touch_down + 插值 touch_move × N + touch_up，与 TCP 版保持一致）"""
         if not self.connected:
             print("❌ 未连接或连接已断开")
             return False
-        
+
         start = time.perf_counter()
-        seq_id = self._send_command(CMD_SWIPE, x1, y1, x2, y2, duration)
-        
-        event = self._wait_event(timeout=10.0)  # 滑动可能需要更长时间
-        latency = (time.perf_counter() - start) * 1000
-        
-        if event and event[0] == EVENT_ACK and event[1] == seq_id:
-            print(f"✅ 滑动成功: 延迟 {latency:.1f}ms")
-            return True
-        else:
-            print(f"❌ 滑动失败: {event}")
+        steps = 20
+        step_delay = duration / 1000.0 / steps
+
+        if not self.touch_down(x1, y1):
+            print(f"❌ 滑动失败 (down): ({x1}, {y1})")
             return False
-    
+        time.sleep(0.010)  # 10ms 稳定触点
+
+        for i in range(1, steps):
+            t = i / steps
+            mx = int(x1 + (x2 - x1) * t)
+            my = int(y1 + (y2 - y1) * t)
+            if not self.touch_move(mx, my):
+                print(f"❌ 滑动失败 (move step {i})")
+                return False
+            time.sleep(step_delay)
+
+        if not self.touch_up(x2, y2):
+            print(f"❌ 滑动失败 (up): ({x2}, {y2})")
+            return False
+
+        latency = (time.perf_counter() - start) * 1000
+        print(f"✅ 滑动成功: 延迟 {latency:.1f}ms")
+        return True
+
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: int = 500) -> bool:
-        """拖拽（长按后移动）"""
+        """拖拽（长按后移动；与滑动相同协议，仅初始等待更长）"""
         if not self.connected:
             print("❌ 未连接或连接已断开")
             return False
-        
+
         start = time.perf_counter()
-        seq_id = self._send_command(CMD_DRAG, x1, y1, x2, y2, duration)
-        
-        event = self._wait_event(timeout=10.0)
-        latency = (time.perf_counter() - start) * 1000
-        
-        if event and event[0] == EVENT_ACK and event[1] == seq_id:
-            print(f"✅ 拖拽成功: 延迟 {latency:.1f}ms")
-            return True
-        else:
-            print(f"❌ 拖拽失败: {event}")
+        steps = 20
+        step_delay = duration / 1000.0 / steps
+
+        if not self.touch_down(x1, y1):
+            print(f"❌ 拖拽失败 (down): ({x1}, {y1})")
             return False
+        time.sleep(0.100)  # 100ms 长按触发拖拽识别
+
+        for i in range(1, steps):
+            t = i / steps
+            mx = int(x1 + (x2 - x1) * t)
+            my = int(y1 + (y2 - y1) * t)
+            if not self.touch_move(mx, my):
+                print(f"❌ 拖拽失败 (move step {i})")
+                return False
+            time.sleep(step_delay)
+
+        if not self.touch_up(x2, y2):
+            print(f"❌ 拖拽失败 (up): ({x2}, {y2})")
+            return False
+
+        latency = (time.perf_counter() - start) * 1000
+        print(f"✅ 拖拽成功: 延迟 {latency:.1f}ms")
+        return True
     
     def get_screen_size(self) -> Optional[Tuple[int, int]]:
         """获取屏幕尺寸"""

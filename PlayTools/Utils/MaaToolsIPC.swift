@@ -267,7 +267,6 @@ final class MaaToolsIPC {
 
     // MARK: - Command Dispatch
 
-    // swiftlint:disable:next function_body_length
     private func processCommand(
         _ cmd: IPCCommandPacket,
         eventSem: UnsafeMutablePointer<sem_t>?
@@ -291,31 +290,38 @@ final class MaaToolsIPC {
                 eventSem: eventSem
             )
 
-        case .tap:
-            logger.debug("TAP (\(cmd.x),\(cmd.y)) \(cmd.duration)ms seq=\(cmd.seqId)")
+        case .touchDown:
+            // 与 TCP 版 TUCH/phase=0 完全一致：立即触发事件，时序由 C++ 侧控制
+            logger.debug("TOUCH_DOWN (\(cmd.x),\(cmd.y)) seq=\(cmd.seqId)")
             let point = CGPoint(x: Double(cmd.x) / scale, y: Double(cmd.y) / scale)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 Toucher.touchcam(point: point, phase: .began,
-                                 tid: &self.tid, actionName: "down", keyName: "maa_tap")
+                                 tid: &self.tid, actionName: "down", keyName: "maa_touch")
             }
-            try? await Task.sleep(nanoseconds: UInt64(cmd.duration) * 1_000_000)
+            sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
+
+        case .touchMove:
+            // 与 TCP 版 TUCH/phase=1 完全一致
+            let point = CGPoint(x: Double(cmd.x) / scale, y: Double(cmd.y) / scale)
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                Toucher.touchcam(point: point, phase: .moved,
+                                 tid: &self.tid, actionName: "move", keyName: "maa_touch")
+            }
+            sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
+
+        case .touchUp:
+            // 与 TCP 版 TUCH/phase=3 完全一致
+            logger.debug("TOUCH_UP (\(cmd.x),\(cmd.y)) seq=\(cmd.seqId)")
+            let point = CGPoint(x: Double(cmd.x) / scale, y: Double(cmd.y) / scale)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 Toucher.touchcam(point: point, phase: .ended,
-                                 tid: &self.tid, actionName: "up", keyName: "maa_tap")
+                                 tid: &self.tid, actionName: "up", keyName: "maa_touch")
                 Toucher.keyView = nil
             }
-            logger.info("→ ACK tap seq=\(cmd.seqId) point=(\(cmd.x),\(cmd.y)) duration=\(cmd.duration)ms")
             sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
-
-        case .swipe:
-            logger.debug("SWIPE (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) \(cmd.duration)ms seq=\(cmd.seqId)")
-            await performSwipe(cmd, eventSem: eventSem)
-
-        case .drag:
-            logger.debug("DRAG (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) \(cmd.duration)ms seq=\(cmd.seqId)")
-            await performDrag(cmd, eventSem: eventSem)
 
         case .getSize:
             logger.debug("GET_SIZE seq=\(cmd.seqId)")
@@ -329,6 +335,14 @@ final class MaaToolsIPC {
             logger.info("→ VERSION_INFO seq=\(cmd.seqId) version=\(IPCConfig.protocolVersion)")
             sendEvent(type: .versionInfo, reqSeqId: cmd.seqId,
                       errorCode: Int32(IPCConfig.protocolVersion), eventSem: eventSem)
+
+        case .terminate:
+            logger.info("TERMINATE seq=\(cmd.seqId) — terminating app")
+            // 先回 ACK，再退出，保证客户端能收到确认
+            sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
+            await MainActor.run {
+                AKInterface.shared?.terminateApplication()
+            }
         }
     }
 
@@ -391,93 +405,6 @@ final class MaaToolsIPC {
                                      width: screenWidth,
                                      height: screenHeight))
         return true
-    }
-
-    // MARK: - Touch Helpers
-
-    private func performSwipe(
-        _ cmd: IPCCommandPacket,
-        eventSem: UnsafeMutablePointer<sem_t>?
-    ) async {
-        let p1       = CGPoint(x: Double(cmd.x) / scale,  y: Double(cmd.y) / scale)
-        let p2       = CGPoint(x: Double(cmd.x2) / scale, y: Double(cmd.y2) / scale)
-        let duration = Double(cmd.duration) / 1000.0
-        let steps    = 20
-
-        await MainActor.run { [weak self] in
-            guard let self = self else { return }
-            Toucher.touchcam(point: p1, phase: .began,
-                             tid: &self.tid, actionName: "down", keyName: "maa_swipe")
-        }
-        try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms 稳定触点
-
-        for step in 1..<steps {
-            let ratio = Double(step) / Double(steps)
-            let mid = CGPoint(
-                x: (Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio) / scale,
-                y: (Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio) / scale
-            )
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                Toucher.touchcam(point: mid, phase: .moved,
-                                 tid: &self.tid, actionName: "move", keyName: "maa_swipe")
-            }
-            try? await Task.sleep(
-                nanoseconds: UInt64(duration / Double(steps) * 1_000_000_000)
-            )
-        }
-
-        await MainActor.run { [weak self] in
-            guard let self = self else { return }
-            Toucher.touchcam(point: p2, phase: .ended,
-                             tid: &self.tid, actionName: "up", keyName: "maa_swipe")
-            Toucher.keyView = nil
-        }
-        logger.info("→ ACK swipe seq=\(cmd.seqId) (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) duration=\(cmd.duration)ms")
-        sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
-    }
-
-    private func performDrag(
-        _ cmd: IPCCommandPacket,
-        eventSem: UnsafeMutablePointer<sem_t>?
-    ) async {
-        let p1       = CGPoint(x: Double(cmd.x) / scale,  y: Double(cmd.y) / scale)
-        let p2       = CGPoint(x: Double(cmd.x2) / scale, y: Double(cmd.y2) / scale)
-        let duration = Double(cmd.duration) / 1000.0
-        let steps    = 20
-
-        await MainActor.run { [weak self] in
-            guard let self = self else { return }
-            Toucher.touchcam(point: p1, phase: .began,
-                             tid: &self.tid, actionName: "down", keyName: "maa_drag")
-        }
-        // DRAG：长按后稍等 100ms 再移动，触发游戏的拖拽识别
-        try? await Task.sleep(nanoseconds: 100_000_000)
-
-        for step in 1..<steps {
-            let ratio = Double(step) / Double(steps)
-            let mid = CGPoint(
-                x: (Double(cmd.x) + (Double(cmd.x2) - Double(cmd.x)) * ratio) / scale,
-                y: (Double(cmd.y) + (Double(cmd.y2) - Double(cmd.y)) * ratio) / scale
-            )
-            await MainActor.run { [weak self] in
-                guard let self = self else { return }
-                Toucher.touchcam(point: mid, phase: .moved,
-                                 tid: &self.tid, actionName: "move", keyName: "maa_drag")
-            }
-            try? await Task.sleep(
-                nanoseconds: UInt64(duration / Double(steps) * 1_000_000_000)
-            )
-        }
-
-        await MainActor.run { [weak self] in
-            guard let self = self else { return }
-            Toucher.touchcam(point: p2, phase: .ended,
-                             tid: &self.tid, actionName: "up", keyName: "maa_drag")
-            Toucher.keyView = nil
-        }
-        logger.info("→ ACK drag seq=\(cmd.seqId) (\(cmd.x),\(cmd.y))→(\(cmd.x2),\(cmd.y2)) duration=\(cmd.duration)ms")
-        sendEvent(type: .ack, reqSeqId: cmd.seqId, errorCode: 0, eventSem: eventSem)
     }
 
     // MARK: - Event Writer

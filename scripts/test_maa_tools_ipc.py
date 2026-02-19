@@ -21,7 +21,7 @@ test_maa_tools_ipc.py — MaaTools IPC 协议测试脚本
   1. 版本查询 (GET_VERSION)
   2. 屏幕尺寸查询 (GET_SIZE)
   3. 截图 (SCREENSHOT)
-  4. 触控操作 (TAP / SWIPE / DRAG)
+  4. 触控操作 (TOUCH_DOWN / TOUCH_MOVE / TOUCH_UP)
 
 性能测试：
   7. 截图帧率（连续 10 次）
@@ -115,7 +115,7 @@ def test_basic_features(client: MaaToolsIPC) -> Optional[Tuple[int, int]]:
 
 
 def test_touch_operations(client: MaaToolsIPC, width: int, height: int):
-    """测试触控操作（TAP / SWIPE / DRAG）"""
+    """测试触控操作（TOUCH_DOWN / TOUCH_MOVE / TOUCH_UP，高层 tap/swipe/drag 由客户端组合）"""
     print("\n" + "=" * 60)
     print("👆 触控操作测试")
     print("=" * 60)
@@ -306,6 +306,8 @@ def main() -> int:
     parser.add_argument('--bundle-id',  help='应用的 Bundle ID，例如 com.hypergryph.arknights')
     parser.add_argument('--container',  help='沙盒容器完整路径')
     parser.add_argument('--no-perf',    action='store_true', help='跳过性能测试')
+    parser.add_argument('--stop-game',  action='store_true',
+                        help='所有测试完成后发送 TERMINATE 终止游戏（对应 TCP 的 TERM 命令）')
     args = parser.parse_args()
 
     print("=" * 60)
@@ -334,6 +336,8 @@ def main() -> int:
         print("  7. 截图帧率测试（10 次）")
         print("  8. 批量点击延迟（100 次）")
         print("  9. 连续滑动（20 次）")
+    if args.stop_game:
+        print("  *. TERMINATE    终止游戏进程（所有测试完成后执行）")
     print()
     print("前置条件：")
     print("  · PlayCover 应用已启动")
@@ -375,12 +379,20 @@ def main() -> int:
         test_touch_operations(client, width, height)
 
         # 性能测试
-        if args.no_perf:
-            print("\n（已跳过性能测试，使用 --no-perf=false 启用）")
+        if not args.no_perf:
+            print("(已跳过性能测试，使用 --no-perf=false 启用）")
+        print("\n" + "=" * 60)
+        print("✅ 功能测试完成！")
+        print("=" * 60)
+
+        if args.stop_game:
             print("\n" + "=" * 60)
-            print("✅ 功能测试完成！")
+            print("⚠️  即将发送 TERMINATE 终止游戏进程")
             print("=" * 60)
-            return 0
+            input("\n按 Enter 确认，Ctrl+C 取消...\n")
+            client.stop_game()
+
+        return 0
 
         print("\n" + "=" * 60)
         print("⚠️  即将执行性能测试（约 130 次操作，需 1~2 分钟）")
@@ -395,6 +407,14 @@ def main() -> int:
 
         if perf_results:
             print_perf_summary(perf_results)
+
+        # stop_game（可选，在所有测试最后执行）
+        if args.stop_game:
+            print("\n" + "=" * 60)
+            print("⚠️  即将发送 TERMINATE 终止游戏进程")
+            print("=" * 60)
+            input("\n按 Enter 确认，Ctrl+C 取消...\n")
+            client.stop_game()
 
         return 0
 
