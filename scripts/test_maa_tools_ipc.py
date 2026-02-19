@@ -53,10 +53,10 @@ from maa_ipc_semaphore import MaaToolsIPC
 
 def save_screenshot(data: bytes, width: int, height: int,
                     filename: str = "screenshot.png") -> bool:
-    """将 RGBA 字节数据保存为 PNG 文件"""
+    """将 BGRA 字节数据保存为 PNG 文件"""
     try:
         from PIL import Image
-        img = Image.frombytes('RGBA', (width, height), data).convert('RGB')
+        img = Image.frombytes('RGBA', (width, height), data, 'raw', 'BGRA').convert('RGB')
         img.save(filename, 'PNG')
         print(f"💾 截图已保存: {filename} ({width}x{height})")
         return True

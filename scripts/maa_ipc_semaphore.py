@@ -817,7 +817,7 @@ class MaaToolsIPC:
         """截图（从专用共享内存读取）
         
         Returns:
-            RGBA 格式的图像数据，失败返回 None
+            BGRA 格式的图像数据，失败返回 None
         """
         if not self.connected:
             print("❌ 未连接或连接已断开")

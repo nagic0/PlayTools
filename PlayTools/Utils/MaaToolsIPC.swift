@@ -367,8 +367,8 @@ final class MaaToolsIPC {
         // 避免每帧约 ~100µs 的 CGContext 分配 + 初始化开销。
         if cachedContext == nil {
             let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-                           | CGBitmapInfo.byteOrder32Big.rawValue
+            let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+                           | CGBitmapInfo.byteOrder32Little.rawValue
             cachedContext = CGContext(
                 data: capPtr,
                 width: screenWidth,
